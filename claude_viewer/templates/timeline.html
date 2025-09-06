@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+
+{% block title %}Timeline - Claude Code Viewer{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h2>
+                <i class="bi bi-clock-history me-2"></i>
+                Session Timeline
+            </h2>
+            <div class="d-flex gap-2">
+                <div class="text-muted">
+                    {{ sessions|length }} session{{ 's' if sessions|length != 1 else '' }} found
+                </div>
+                <div class="btn-group" role="group">
+                    <a href="/" class="btn btn-outline-secondary btn-sm">
+                        <i class="bi bi-folder me-1"></i>
+                        Projects View
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        {% if sessions %}
+            <!-- Search Box -->
+            <div class="card mb-4">
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-8">
+                            <div class="input-group">
+                                <span class="input-group-text">
+                                    <i class="bi bi-search"></i>
+                                </span>
+                                <input type="text" 
+                                       class="form-control" 
+                                       id="timeline-search" 
+                                       placeholder="Search sessions across all projects...">
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <select class="form-select" id="project-filter">
+                                <option value="">All Projects</option>
+                                {% for session in sessions %}
+                                    {% if session.project_name not in (sessions[:loop.index0] | map(attribute='project_name') | list) %}
+                                        <option value="{{ session.project_name }}">{{ session.project_display_name }}</option>
+                                    {% endif %}
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Timeline Sessions -->
+            <div id="timeline-sessions">
+                {% for session in sessions %}
+                    <div class="card session-card mb-3" 
+                         data-project="{{ session.project_name }}" 
+                         data-search-content="{{ session.first_message_preview|lower }} {{ session.project_display_name|lower }}">
+                        <div class="card-body">
+                            <div class="row align-items-center">
+                                <div class="col-md-8">
+                                    <div class="d-flex align-items-center mb-2">
+                                        <div class="project-badge me-3">
+                                            <span class="badge bg-secondary">
+                                                <i class="bi bi-folder me-1"></i>
+                                                {{ session.project_display_name }}
+                                            </span>
+                                        </div>
+                                        <div class="session-time text-muted">
+                                            <i class="bi bi-clock me-1"></i>
+                                            {{ session.modified_display }}
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="session-preview mb-2" style="line-height: 1.5;">
+                                        <p class="mb-1">{{ session.first_message_preview|truncate(400, True) }}</p>
+                                    </div>
+                                    
+                                    <div class="session-stats text-muted small">
+                                        <span class="me-3">
+                                            <i class="bi bi-chat-dots me-1"></i>
+                                            {{ session.message_count }} messages
+                                        </span>
+                                        <span class="me-3">
+                                            <i class="bi bi-file-text me-1"></i>
+                                            {{ "%.1f"|format(session.size / 1024) }} KB
+                                        </span>
+                                        <span class="session-id text-muted">
+                                            ID: {{ session.id[:8] }}...
+                                        </span>
+                                    </div>
+                                </div>
+                                <div class="col-md-4 text-end">
+                                    <div class="d-flex justify-content-end gap-2">
+                                        <a href="/conversation/{{ session.project_name }}/{{ session.id }}" 
+                                           class="btn btn-primary btn-sm">
+                                            <i class="bi bi-arrow-right me-1"></i>
+                                            Open Session
+                                        </a>
+                                        <a href="/project/{{ session.project_name }}" 
+                                           class="btn btn-outline-secondary btn-sm">
+                                            <i class="bi bi-folder me-1"></i>
+                                            View Project
+                                        </a>
+                                    </div>
+                                    
+                                    <div class="text-muted small mt-2">
+                                        Created: {{ session.created_display }}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                {% endfor %}
+            </div>
+            
+            <!-- Load More Button (for future pagination) -->
+            <div class="text-center mt-4" id="load-more-container" style="display: none;">
+                <button class="btn btn-outline-primary" id="load-more-btn">
+                    <i class="bi bi-arrow-down me-1"></i>
+                    Load More Sessions
+                </button>
+            </div>
+            
+        {% else %}
+            <div class="text-center py-5">
+                <div class="mb-4">
+                    <i class="bi bi-clock-history" style="font-size: 4rem; color: var(--secondary-color);"></i>
+                </div>
+                <h4 class="text-muted">No Sessions Found</h4>
+                <p class="text-muted">
+                    No conversation sessions were found across all projects.<br>
+                    Make sure Claude Code has been used and sessions exist.
+                </p>
+                <a href="/" class="btn btn-outline-primary">
+                    <i class="bi bi-folder me-1"></i>
+                    Back to Projects
+                </a>
+            </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Timeline Stats -->
+{% if sessions %}
+<div class="row mt-5">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="mb-0">
+                    <i class="bi bi-bar-chart me-2"></i>
+                    Timeline Statistics
+                </h6>
+            </div>
+            <div class="card-body">
+                <div class="row text-center">
+                    <div class="col-md-3">
+                        <div class="h4 text-primary">{{ sessions|length }}</div>
+                        <small class="text-muted">Total Sessions</small>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="h4 text-success">{{ sessions|map(attribute='project_name')|unique|list|length }}</div>
+                        <small class="text-muted">Projects</small>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="h4 text-warning">{{ sessions|sum(attribute='message_count') }}</div>
+                        <small class="text-muted">Total Messages</small>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="h4 text-info">{{ "%.1f"|format(sessions|sum(attribute='size') / 1024 / 1024) }} MB</div>
+                        <small class="text-muted">Total Size</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<script>
+// Timeline search functionality
+document.addEventListener('DOMContentLoaded', function() {
+    const searchInput = document.getElementById('timeline-search');
+    const projectFilter = document.getElementById('project-filter');
+    const sessionCards = document.querySelectorAll('.session-card');
+
+    function filterSessions() {
+        const searchTerm = searchInput.value.toLowerCase();
+        const selectedProject = projectFilter.value;
+        
+        sessionCards.forEach(card => {
+            const searchContent = card.dataset.searchContent || '';
+            const projectName = card.dataset.project || '';
+            
+            const matchesSearch = !searchTerm || searchContent.includes(searchTerm);
+            const matchesProject = !selectedProject || projectName === selectedProject;
+            
+            if (matchesSearch && matchesProject) {
+                card.style.display = 'block';
+            } else {
+                card.style.display = 'none';
+            }
+        });
+        
+        // Update visible count
+        const visibleCards = document.querySelectorAll('.session-card:not([style*="display: none"])');
+        const countElement = document.querySelector('.text-muted');
+        if (countElement) {
+            const total = sessionCards.length;
+            const visible = visibleCards.length;
+            countElement.textContent = `${visible} of ${total} session${total !== 1 ? 's' : ''} shown`;
+        }
+    }
+
+    searchInput.addEventListener('input', filterSessions);
+    projectFilter.addEventListener('change', filterSessions);
+});
+</script>
+{% endblock %}

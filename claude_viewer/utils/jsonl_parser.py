@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 from datetime import datetime
 import difflib
+import shutil
 
 class JSONLParser:
     def __init__(self, claude_projects_path: str = None):
@@ -64,10 +65,24 @@ class JSONLParser:
                     "created_display": self._format_relative_time(created_dt),
                     "modified_display": self._format_relative_time(modified_dt),
                     "message_count": message_count,
-                    "first_message_preview": first_user_message
+                    "first_message_preview": first_user_message,
+                    "project_name": project_name,
+                    "project_display_name": self._format_project_name(project_name)
                 })
         
         return sorted(sessions, key=lambda x: x["modified"], reverse=True)
+
+    def get_all_sessions_timeline(self) -> List[Dict]:
+        """Get all sessions from all projects sorted by modification time"""
+        all_sessions = []
+        
+        projects = self.get_projects()
+        for project in projects:
+            project_sessions = self.get_sessions(project["name"])
+            all_sessions.extend(project_sessions)
+        
+        # Sort by modified time, newest first
+        return sorted(all_sessions, key=lambda x: x["modified"], reverse=True)
     
     def get_conversation(
         self, 
@@ -312,7 +327,7 @@ class JSONLParser:
         except:
             return 0
     
-    def _get_first_user_message(self, file_path: str, max_length: int = 200) -> str:
+    def _get_first_user_message(self, file_path: str, max_length: int = 600) -> str:
         """Get the first user message from a session for preview"""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -604,3 +619,119 @@ class JSONLParser:
                    .replace('>', '&gt;')
                    .replace('"', '&quot;')
                    .replace("'", '&#x27;'))
+    
+    def detect_oversized_messages(self, project_name: str, session_id: str, size_threshold: int = 100000) -> List[Dict]:
+        """Detect messages that are too large and may cause context overflow"""
+        session_path = os.path.join(self.claude_projects_path, project_name, f"{session_id}.jsonl")
+        
+        if not os.path.exists(session_path):
+            return []
+        
+        oversized_messages = []
+        
+        with open(session_path, 'r', encoding='utf-8') as f:
+            for line_num, line in enumerate(f, 1):
+                try:
+                    line_size = len(line.encode('utf-8'))
+                    
+                    # Check if this line is oversized
+                    if line_size > size_threshold:
+                        data = json.loads(line.strip())
+                        parsed_message = self._parse_message(data, line_num)
+                        
+                        # Determine the message type and context
+                        message_info = {
+                            "line_number": line_num,
+                            "size_bytes": line_size,
+                            "size_mb": round(line_size / (1024 * 1024), 2),
+                            "role": parsed_message.get("role", "unknown"),
+                            "type": parsed_message.get("type", "unknown"),
+                            "timestamp": parsed_message.get("timestamp"),
+                            "preview": self._get_oversized_message_preview(data),
+                            "raw_type": data.get("type", "unknown")
+                        }
+                        
+                        oversized_messages.append(message_info)
+                        
+                except json.JSONDecodeError:
+                    continue
+                except Exception as e:
+                    # Handle encoding or other errors
+                    oversized_messages.append({
+                        "line_number": line_num,
+                        "size_bytes": len(line.encode('utf-8', errors='ignore')),
+                        "size_mb": round(len(line.encode('utf-8', errors='ignore')) / (1024 * 1024), 2),
+                        "role": "error",
+                        "type": "error",
+                        "timestamp": None,
+                        "preview": f"Error parsing line: {str(e)}",
+                        "raw_type": "error"
+                    })
+        
+        return oversized_messages
+    
+    def _get_oversized_message_preview(self, data: Dict) -> str:
+        """Generate a preview for oversized message to help identify the content"""
+        try:
+            # Check message structure
+            if data.get("type") in ["user", "assistant"]:
+                message_data = data.get("message", {})
+                content = message_data.get("content", [])
+                
+                if isinstance(content, list) and len(content) > 0:
+                    first_item = content[0]
+                    if isinstance(first_item, dict):
+                        if first_item.get("type") == "tool_result":
+                            return f"Tool Result: {first_item.get('tool_use_id', 'unknown')[:20]}... (Large output)"
+                        elif first_item.get("type") == "tool_use":
+                            tool_name = first_item.get("name", "unknown")
+                            return f"Tool Use: {tool_name}"
+                        elif first_item.get("type") == "text":
+                            text_preview = first_item.get("text", "")[:100]
+                            return f"Text: {text_preview}..."
+            
+            # Legacy format
+            elif "role" in data:
+                content = data.get("content", "")
+                if isinstance(content, str):
+                    return f"Legacy Message: {content[:100]}..."
+                elif isinstance(content, list) and len(content) > 0:
+                    return f"Legacy Structured Content: {str(content[0])[:100]}..."
+            
+            return f"Type: {data.get('type', 'unknown')}"
+            
+        except Exception:
+            return "Preview unavailable"
+    
+    def cleanup_oversized_messages(self, project_name: str, session_id: str, from_line: int) -> bool:
+        """Remove oversized message and all subsequent messages from the session file"""
+        session_path = os.path.join(self.claude_projects_path, project_name, f"{session_id}.jsonl")
+        
+        if not os.path.exists(session_path):
+            return False
+        
+        try:
+            # Create backup
+            backup_path = session_path + f".backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            
+            # Read all lines up to the target line
+            kept_lines = []
+            with open(session_path, 'r', encoding='utf-8') as f:
+                for line_num, line in enumerate(f, 1):
+                    if line_num < from_line:
+                        kept_lines.append(line)
+                    else:
+                        break
+            
+            # Create backup of original file
+            shutil.copy2(session_path, backup_path)
+            
+            # Write cleaned content
+            with open(session_path, 'w', encoding='utf-8') as f:
+                f.writelines(kept_lines)
+            
+            return True
+            
+        except Exception as e:
+            print(f"Error cleaning up messages: {e}")
+            return False

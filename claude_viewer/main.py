@@ -179,6 +179,22 @@ async def get_projects():
     parser = get_parser()
     return parser.get_projects()
 
+@app.get("/timeline", response_class=HTMLResponse)
+async def timeline_view(request: Request):
+    """Timeline view showing all sessions across projects"""
+    parser = get_parser()
+    all_sessions = parser.get_all_sessions_timeline()
+    return templates.TemplateResponse("timeline.html", {
+        "request": request,
+        "sessions": all_sessions
+    })
+
+@app.get("/api/sessions-timeline", response_model=List[Session])
+async def get_sessions_timeline():
+    """API endpoint to get all sessions across projects sorted by time"""
+    parser = get_parser()
+    return parser.get_all_sessions_timeline()
+
 @app.get("/project/{project_name}", response_class=HTMLResponse)
 async def project_view(request: Request, project_name: str):
     """Project page showing all sessions"""
@@ -270,6 +286,47 @@ async def search_sessions(
         "results": results,
         "total_results": len(results)
     }
+
+@app.get("/api/oversized-messages/{project_name}/{session_id}")
+async def get_oversized_messages(
+    project_name: str,
+    session_id: str,
+    size_threshold: int = Query(100000, description="Size threshold in bytes")
+):
+    """API endpoint to detect oversized messages that may cause context overflow"""
+    parser = get_parser()
+    oversized_messages = parser.detect_oversized_messages(project_name, session_id, size_threshold)
+    
+    return {
+        "project_name": project_name,
+        "session_id": session_id,
+        "size_threshold": size_threshold,
+        "oversized_messages": oversized_messages,
+        "count": len(oversized_messages)
+    }
+
+@app.post("/api/cleanup-messages/{project_name}/{session_id}")
+async def cleanup_oversized_messages(
+    project_name: str,
+    session_id: str,
+    from_line: int = Query(..., description="Line number to start cleanup from")
+):
+    """API endpoint to cleanup oversized messages from the specified line onwards"""
+    parser = get_parser()
+    success = parser.cleanup_oversized_messages(project_name, session_id, from_line)
+    
+    if success:
+        return {
+            "success": True,
+            "message": f"Successfully cleaned up messages from line {from_line} onwards",
+            "project_name": project_name,
+            "session_id": session_id
+        }
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to cleanup messages for session {session_id}"
+        )
 
 @app.get("/health")
 async def health_check():

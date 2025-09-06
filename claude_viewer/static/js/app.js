@@ -35,6 +35,12 @@ class ClaudeViewer {
         filters.forEach(filter => {
             filter.addEventListener('change', () => this.autoSubmitFilters());
         });
+
+        // Check oversized messages
+        const checkOversizedBtn = document.getElementById('check-oversized-btn');
+        if (checkOversizedBtn) {
+            checkOversizedBtn.addEventListener('click', () => this.checkOversizedMessages());
+        }
     }
 
     setupCodeCopyButtons() {
@@ -230,6 +236,171 @@ class ClaudeViewer {
         const url = new URL(window.location);
         url.searchParams.set('page', pageNumber);
         window.location.href = url.toString();
+    }
+
+    // Oversized messages functionality
+    async checkOversizedMessages() {
+        const btn = document.getElementById('check-oversized-btn');
+        const originalHtml = btn.innerHTML;
+        
+        // Show loading state
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>检查中...';
+        btn.disabled = true;
+
+        try {
+            // Get project and session info from current URL
+            const pathParts = window.location.pathname.split('/');
+            const projectName = pathParts[2];
+            const sessionId = pathParts[3];
+
+            const response = await fetch(`/api/oversized-messages/${projectName}/${sessionId}?size_threshold=100000`);
+            const data = await response.json();
+
+            if (data.count > 0) {
+                this.showOversizedMessages(data.oversized_messages);
+            } else {
+                this.showNoOversizedMessages();
+            }
+
+        } catch (error) {
+            console.error('Error checking oversized messages:', error);
+            this.showOversizedError(error.message);
+        } finally {
+            // Restore button state
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+        }
+    }
+
+    showOversizedMessages(messages) {
+        const alert = document.getElementById('oversized-alert');
+        const details = document.getElementById('oversized-details');
+        
+        let html = `
+            <p class="mb-3">发现 <strong>${messages.length}</strong> 个过大的消息可能导致上下文溢出：</p>
+            <div class="table-responsive">
+                <table class="table table-sm table-striped">
+                    <thead>
+                        <tr>
+                            <th>行号</th>
+                            <th>大小</th>
+                            <th>类型</th>
+                            <th>预览</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+
+        messages.forEach((msg, index) => {
+            html += `
+                <tr>
+                    <td><code>${msg.line_number}</code></td>
+                    <td><span class="badge bg-warning">${msg.size_mb} MB</span></td>
+                    <td><span class="badge bg-secondary">${msg.role}</span></td>
+                    <td class="text-truncate" style="max-width: 200px;" title="${msg.preview}">${msg.preview}</td>
+                    <td>
+                        <button 
+                            class="btn btn-danger btn-sm" 
+                            onclick="window.claudeViewer.confirmCleanupMessages(${msg.line_number})"
+                            title="删除此消息及之后的所有消息"
+                        >
+                            <i class="bi bi-trash"></i>
+                            清理
+                        </button>
+                    </td>
+                </tr>
+            `;
+        });
+
+        html += `
+                    </tbody>
+                </table>
+            </div>
+            <div class="mt-3">
+                <small class="text-muted">
+                    <i class="bi bi-info-circle me-1"></i>
+                    清理操作会删除选定行及其之后的所有消息，并创建备份文件
+                </small>
+            </div>
+        `;
+
+        details.innerHTML = html;
+        alert.classList.remove('d-none');
+    }
+
+    showNoOversizedMessages() {
+        const alert = document.getElementById('oversized-alert');
+        const details = document.getElementById('oversized-details');
+        
+        alert.className = 'alert alert-success';
+        details.innerHTML = `
+            <h6 class="alert-heading">
+                <i class="bi bi-check-circle-fill me-2"></i>
+                检查完成
+            </h6>
+            <p class="mb-0">没有发现过大的消息。这个对话应该能正常加载。</p>
+        `;
+        alert.classList.remove('d-none');
+
+        // Auto-hide after 5 seconds
+        setTimeout(() => {
+            alert.classList.add('d-none');
+            alert.className = 'alert alert-warning d-none';
+        }, 5000);
+    }
+
+    showOversizedError(errorMessage) {
+        const alert = document.getElementById('oversized-alert');
+        const details = document.getElementById('oversized-details');
+        
+        alert.className = 'alert alert-danger';
+        details.innerHTML = `
+            <h6 class="alert-heading">
+                <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                检查失败
+            </h6>
+            <p class="mb-0">无法检查过大消息: ${errorMessage}</p>
+        `;
+        alert.classList.remove('d-none');
+    }
+
+    async confirmCleanupMessages(fromLine) {
+        const confirmed = confirm(
+            `确定要删除第 ${fromLine} 行及其之后的所有消息吗？\n\n` +
+            `这个操作不可逆转，但会创建备份文件。\n` +
+            `删除后需要刷新页面查看结果。`
+        );
+
+        if (confirmed) {
+            await this.cleanupMessages(fromLine);
+        }
+    }
+
+    async cleanupMessages(fromLine) {
+        try {
+            // Get project and session info from current URL
+            const pathParts = window.location.pathname.split('/');
+            const projectName = pathParts[2];
+            const sessionId = pathParts[3];
+
+            const response = await fetch(`/api/cleanup-messages/${projectName}/${sessionId}?from_line=${fromLine}`, {
+                method: 'POST'
+            });
+
+            const result = await response.json();
+
+            if (response.ok && result.success) {
+                alert(`清理成功！已删除第 ${fromLine} 行及其之后的消息。\n页面将重新加载以显示清理后的内容。`);
+                window.location.reload();
+            } else {
+                throw new Error(result.detail || '清理失败');
+            }
+
+        } catch (error) {
+            console.error('Error cleaning messages:', error);
+            alert(`清理失败: ${error.message}`);
+        }
     }
 }
 
